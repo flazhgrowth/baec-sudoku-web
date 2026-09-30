@@ -1,0 +1,751 @@
+# SUPERSEDED: the backend's docs/api.md (baec-portfolio-api) is now the source of truth. This is the
+# original draft and differs from it (response envelope, register/login shape, error codes, presence).
+openapi: 3.0.3
+info:
+  title: Sudoku API
+  version: 3.0.0
+  description: |
+    Backend contract for the Sudoku web app. The server is authoritative for the
+    solution, move validation, scoring, turn timing and presence; the solution is
+    never sent to the client.
+
+    ## Accounts
+    A simple username + password account system, purely so games and (later) a
+    leaderboard can be attributed to a person. Registration performs no
+    verification of any kind — no email, no confirmation step. See "Auth
+    endpoints" below.
+
+    The client must be logged in to create or join a game: `POST /games` and
+    `POST /games/join` both require `Authorization: Bearer <account token>`.
+    This is a different token from the per-seat `X-Player-Token` described next —
+    see "Identity" for how the two relate.
+
+    ## Game kinds
+    | `mode` | `online` | Meaning |
+    | --- | --- | --- |
+    | `single` | false | Classic play. One player, no turns, no timer, no points. `mistakes` is tracked. |
+    | `versus` | false | Two players sharing one device, turn based. Created with both players seated. |
+    | `versus` | true | Two players on their own devices. Created as a lobby (`status: waiting`) that a second player joins by code. |
+
+    ## Identity
+    Two separate tokens are in play, and they answer different questions:
+
+    - **Account token** (`Authorization: Bearer <token>`, from `/auth/login` or
+      `/auth/register`): *who is calling*. Required on `POST /games` and
+      `POST /games/join`. The server uses it to set the acting seat's `user_id`
+      and to take that seat's `name` from the account's username — any name for
+      that seat in `player_names` is ignored.
+    - **Player token** (`X-Player-Token`, from `credentials` in the `Session`
+      that create/join returns): *which seat, in this one game*. Required on
+      `POST /games/{id}/moves` and `POST /games/{id}/forfeit`; the event stream
+      takes it as `?token=` instead, since browsers cannot set headers on
+      `EventSource`. The server derives the acting player from this token; the
+      client never sends a player id directly.
+
+    Why both: a single account can hold both seats of a same-device `versus`
+    game (one `POST /games` call, using one account token, returns two player
+    tokens — one per seat), but an online game's guest authenticates with their
+    own account token when they join, and the two seats' player tokens go to two
+    different devices.
+
+    - Online games: create returns the host's player-token credential only, join
+      returns the guest's. Each device holds exactly one.
+    - Same-device versus games: create returns both credentials, and the client
+      uses the token of whoever's turn it is. Only the seat matching the caller's
+      account token gets a `user_id`; the other is a guest (`user_id: null`).
+    - Single: one credential.
+
+    ## Online lifecycle
+    1. Host `POST /games` with `online: true`. Response: `status: waiting`,
+       `join_code` (6 chars from `ABCDEFGHJKLMNPQRSTUVWXYZ23456789`, unique among
+       open lobbies), one player.
+    2. Host opens the event stream and waits.
+    3. Guest `POST /games/join` with the code. The game starts: `status:
+       in_progress`, `join_code: null`, `started_at` = now, and player 1 (the host)
+       gets the first turn. The host receives this over the stream
+       (`player_joined`).
+    4. Play. Both devices keep their stream open.
+    5. The game ends when the puzzle is solved, or when a player forfeits (explicit
+       call, or disconnected too long). `end_reason` says which.
+
+    Lobbies nobody joins should be discarded by the server after a while (suggest
+    30 minutes); the game then answers `404 GAME_NOT_FOUND`.
+
+    ## Presence and forfeit (online, `in_progress` only)
+    - A player is **connected** while their event stream is open, or they made an
+      authenticated request or heartbeat less than 15 s ago. The mock uses the
+      15 s window; a backend with real streams can use "stream open" instead and
+      start the clock when the last stream closes.
+    - `Player.connected` flips to false 15 s after the last sign of life, and back
+      to true when they return. Each flip is a `player_connection` event.
+    - While disconnected, `Player.forfeit_at` = last sign of life +
+      `rules.disconnect_forfeit_ms` (60 000 ms). If it passes, that player forfeits:
+      the game completes with `end_reason: forfeit` and the other player as winner.
+      The clock never starts before `started_at`.
+    - A disconnected player's turns still expire normally (no fault, no points).
+    - Nothing here applies to `waiting` lobbies, single, or same-device games.
+
+    ## Versus rules (values come from `Game.rules`)
+    1. A turn is one attempt to fill one box. `players[0]` starts.
+    2. A turn lasts `turn_limit_ms` (10 000 ms). At or after `deadline_at` the turn is
+       over: no fault, no points, and the turn passes to the other player.
+    3. A correct fill scores `max(min_points, max_points - floor(elapsed_ms / 1000))`,
+       where `elapsed_ms = now - current_turn.started_at`. So 10 points in the first
+       second, 9 in the second, ... 1 point from the tenth second on.
+       A correct fill ends the turn.
+    4. A wrong fill scores nothing, is **not** written to the board, adds one
+       fault (`faults`, `mistakes`) and ends the turn.
+    5. On reaching `fault_limit` (3) faults the player owes `skip_turns_on_fault_limit`
+       (2) turns (`skip_turns_remaining = 2`). The turn passes to the opponent as
+       usual. Each time the turn would come back to the offender, it is skipped
+       instead (`skip_turns_remaining--`, event `turn_skipped`) and stays with the
+       opponent. When the last skipped turn is consumed `faults` resets to 0.
+       Net effect: after the third fault the opponent plays three turns in a row.
+    6. The game completes when every box matches the solution. `winner_id` is the
+       player with the higher score, or `null` on a draw.
+
+    ## Turn expiry
+    The server must expire turns on its own (a timer at `deadline_at`), because in
+    online games either client may be gone. In addition, every request touching a
+    game must first apply anything that is due (`now >= deadline_at`, presence
+    changes, forfeits). When a turn is expired lazily, the next turn starts at the
+    time of processing (`started_at = now`), not at the old deadline. State changed
+    lazily is committed even if the request then fails with an error.
+
+    `POST /games/{id}/turn/expire` is a fallback clients call shortly after the
+    deadline; it does nothing before the deadline. Same-device games rely on it
+    (no stream) unless the server timer covers them too.
+
+    ## Live updates (SSE)
+    `GET /games/{id}/events?token=...` streams `text/event-stream`.
+    - On connect the server sends one `update` with the full state and `events: []`.
+      A reconnect therefore resyncs the client.
+    - After every state change it sends `update` with the new `game` and the
+      `events` describing what just happened (moves, timeouts, joins, ...), so the
+      other device can animate and announce them.
+    - Send a `: ping` comment about every 10 s to keep proxies from closing the
+      stream. The stream is what marks a player as connected.
+    - Every state change increments `Game.version`. Clients drop states older than
+      the one they hold and announce a given change's events only once, so it is
+      fine that the mover receives the same change both in the HTTP response and
+      on the stream.
+    - `401 INVALID_TOKEN` / `404 GAME_NOT_FOUND` if the token or game is unknown.
+
+    ## Time
+    All timestamps are ISO-8601 UTC. Every `Game` carries `server_time`; the client
+    uses it to correct clock skew for its countdown.
+
+    ## Coordinates
+    `row` and `col` are 0-based, top-left is (0, 0). Grids are `[row][col]`; `0`
+    means an empty box.
+
+    ## Puzzle generation
+    Puzzles must have exactly one solution. Suggested clue counts:
+    easy 40, medium 32, hard 26. Reference implementations live in this repo:
+    `src/mock/generator.ts` (puzzles) and `src/mock/engine.ts` (all rules above,
+    with tests in `engine.test.ts`).
+security: []   # no default; only the operations marked with AccountToken need it
+servers:
+  - url: /ms/sudous/api/v1
+paths:
+  /auth/register:
+    post:
+      operationId: register
+      summary: Create an account
+      description: No verification of any kind — the account exists as soon as this returns.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+            example: { username: Alex, password: hunter2222 }
+      responses:
+        '201':
+          description: Account created and logged in.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthSession' }
+        '409':
+          description: Username already taken, case-insensitively (`USERNAME_TAKEN`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /auth/login:
+    post:
+      operationId: login
+      summary: Log in
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+            example: { username: Alex, password: hunter2222 }
+      responses:
+        '200':
+          description: Logged in. Any of that account's earlier tokens keep working too — this doesn't revoke them.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthSession' }
+        '401':
+          description: |
+            Unknown username or wrong password (`INVALID_CREDENTIALS`). Deliberately the
+            same error either way, so a caller can't use this endpoint to test whether a
+            username is registered.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /auth/me:
+    get:
+      operationId: me
+      summary: Resolve the account behind a token
+      description: Used to restore a session after a reload, and to confirm a stored token is still valid.
+      security: [{ AccountToken: [] }]
+      responses:
+        '200':
+          description: The account.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/InvalidToken' }
+  /auth/logout:
+    post:
+      operationId: logout
+      summary: Invalidate an account token
+      security: [{ AccountToken: [] }]
+      responses:
+        '204':
+          description: Logged out. Idempotent — logging out an already-invalid token is not an error.
+  /games:
+    post:
+      operationId: createGame
+      summary: Start a new game (or open an online lobby)
+      security: [{ AccountToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateGameRequest' }
+            examples:
+              single:
+                value: { mode: single, difficulty: medium }
+              sameDevice:
+                summary: Same-device versus — player_names[0] (the caller) is ignored; only [1] is used
+                value: { mode: versus, difficulty: hard, player_names: ['', Sam] }
+              onlineHost:
+                value: { mode: versus, difficulty: hard, online: true }
+      responses:
+        '201':
+          description: |
+            Game created. Same-device versus starts with the first turn running.
+            Online returns a `waiting` lobby.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+        '401': { $ref: '#/components/responses/InvalidToken' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /games/join:
+    post:
+      operationId: joinGame
+      summary: Join an online lobby by code
+      description: |
+        Seats the caller as `p2` (using their account's username and id), starts
+        the game and its first turn, and notifies the host over the event
+        stream. Codes are case-insensitive.
+      security: [{ AccountToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/JoinGameRequest' }
+            example: { code: ABC234 }
+      responses:
+        '200':
+          description: Joined. `credentials` holds the guest's player token.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+        '401': { $ref: '#/components/responses/InvalidToken' }
+        '404':
+          description: No open lobby with that code (`JOIN_CODE_NOT_FOUND`). Also returned for a lobby that already started.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The game has already started (`GAME_FULL`). Only possible in a race with another joiner.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /games/{gameId}:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    get:
+      operationId: getGame
+      summary: Get the current state of a game
+      description: Used to resume after a reload. Applies anything that is due first. No token needed.
+      responses:
+        '200':
+          description: Current game state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Game' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{gameId}/events:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - name: token
+        in: query
+        required: true
+        description: A player token for this game. Marks that player as connected while the stream is open.
+        schema: { type: string }
+    get:
+      operationId: streamGame
+      summary: Live updates (Server-Sent Events)
+      description: |
+        Each message is `event: update` with a JSON `GameUpdate` as `data`. See
+        "Live updates" in the API description.
+      responses:
+        '200':
+          description: Event stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+              example: |
+                event: update
+                data: {"game":{...},"events":[{"type":"move","player_id":"p1","row":4,"col":7,"value":3,"result":"correct","points":8}]}
+        '401': { $ref: '#/components/responses/InvalidToken' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{gameId}/moves:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/PlayerToken'
+    post:
+      operationId: submitMove
+      summary: Fill a box
+      description: |
+        Validates the fill against the solution. A wrong number is a normal `200`
+        with `result: incorrect`, not an error. Errors are for requests that cannot
+        be processed at all (see `409` codes).
+
+        After a `409` the response carries the current `game`, so the client can
+        resync without another call.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MoveRequest' }
+            example: { row: 4, col: 7, value: 3 }
+      responses:
+        '200':
+          description: Move processed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MoveResponse' }
+        '401': { $ref: '#/components/responses/InvalidToken' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: |
+            The move was not applied. `error.code` is one of:
+            - `GAME_NOT_STARTED`: online lobby still waiting for a second player.
+            - `GAME_COMPLETED`: the game is over (including a forfeit).
+            - `TURN_EXPIRED`: the deadline passed before the move arrived. The
+              timeout has been applied; `error.game` shows the new turn.
+            - `NOT_YOUR_TURN`: the token's player is not `current_turn.player_id`.
+            - `CELL_NOT_EMPTY`: the box already holds a clue or a correct fill.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /games/{gameId}/turn/expire:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    post:
+      operationId: expireTurn
+      summary: Report that the current turn ran out of time
+      description: |
+        Fallback for the server's own turn timer. The server only acts when
+        `now >= deadline_at`, so a client calling early or twice cannot cut a turn
+        short. Applies the timeout (no fault, no points) and starts the next turn,
+        consuming skipped turns. No token needed.
+      responses:
+        '200':
+          description: Timeout applied
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GameUpdate' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: |
+            `error.code` is one of:
+            - `TURN_NOT_EXPIRED`: the deadline has not passed yet (or the server
+              already expired it). `error.game` holds the current state.
+            - `NO_ACTIVE_TURN`: the game is in `single` mode.
+            - `GAME_NOT_STARTED`: online lobby still waiting.
+            - `GAME_COMPLETED`: the game is over.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /games/{gameId}/forfeit:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/PlayerToken'
+    post:
+      operationId: forfeit
+      summary: Leave a running online game
+      description: |
+        The caller loses; the opponent wins (`end_reason: forfeit`). Only for online
+        games in progress. Leaving a `waiting` lobby needs no call: the lobby simply
+        expires.
+      responses:
+        '200':
+          description: Game completed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GameUpdate' }
+        '401': { $ref: '#/components/responses/InvalidToken' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: |
+            `error.code` is one of `NOT_ONLINE`, `GAME_NOT_STARTED`, `GAME_COMPLETED`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+components:
+  securitySchemes:
+    AccountToken:
+      type: http
+      scheme: bearer
+      description: Token from `/auth/register` or `/auth/login`, i.e. `AuthSession.token`. Identifies the calling account.
+  parameters:
+    GameId:
+      name: gameId
+      in: path
+      required: true
+      schema: { type: string }
+    PlayerToken:
+      name: X-Player-Token
+      in: header
+      required: true
+      description: Secret token from `credentials`, i.e. `Credential.token`. Identifies the acting player *within this one game* — see "Identity".
+      schema: { type: string }
+  responses:
+    NotFound:
+      description: Game not found (`GAME_NOT_FOUND`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    InvalidToken:
+      description: Missing or unknown player token (`INVALID_TOKEN`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    ValidationError:
+      description: Invalid input (`VALIDATION_ERROR`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+  schemas:
+    User:
+      type: object
+      required: [id, username, created_at]
+      properties:
+        id: { type: string }
+        username: { type: string, description: '3-20 letters, digits or underscores. Unique, case-insensitively.' }
+        created_at: { type: string, format: date-time }
+    RegisterRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string, example: Alex }
+        password: { type: string, format: password, description: 6-72 characters. No other requirement. }
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string }
+        password: { type: string, format: password }
+    AuthSession:
+      type: object
+      required: [user, token]
+      properties:
+        user: { $ref: '#/components/schemas/User' }
+        token: { type: string, description: 'Send as `Authorization: Bearer <token>`.' }
+    Mode:
+      type: string
+      enum: [single, versus]
+    Difficulty:
+      type: string
+      enum: [easy, medium, hard]
+    Grid:
+      type: array
+      description: 9 rows of 9 integers, 0 = empty.
+      minItems: 9
+      maxItems: 9
+      items:
+        type: array
+        minItems: 9
+        maxItems: 9
+        items: { type: integer, minimum: 0, maximum: 9 }
+    CreateGameRequest:
+      type: object
+      required: [mode, difficulty]
+      properties:
+        mode: { $ref: '#/components/schemas/Mode' }
+        difficulty: { $ref: '#/components/schemas/Difficulty' }
+        online:
+          type: boolean
+          default: false
+          description: 'Only valid with `mode: versus`. Creates a lobby that a second player joins by code.'
+        player_names:
+          type: array
+          description: |
+            Index 0 (the caller, from `AccountToken`) is always ignored: their
+            seat's name is the account's username. So in practice this is only
+            ever used for index 1, the second seat of a same-device `versus`
+            game (a guest with no account) — trimmed, truncated to 20
+            characters, defaulting to "Player 2" if blank. Meaningless for
+            `single` and for online `versus` (which has no second local seat).
+          items: { type: string }
+          maxItems: 2
+    JoinGameRequest:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string, example: ABC234 }
+    Credential:
+      type: object
+      required: [player_id, token]
+      properties:
+        player_id:
+          type: string
+          description: >-
+            The seat this token controls within this one game. Equals `Player.id` in
+            `game.players`, and is what `current_turn.player_id`, `winner_id` and event
+            `player_id` refer to. It is NOT the account's `user_id` or username: to find the
+            account behind a seat, look up the player with this id and read its `user_id`
+            (null for a same-device guest). Opaque and unique only within the game; the mock
+            uses p1 / p2 (turn order).
+        token: { type: string, description: Secret. Send as `X-Player-Token`. }
+    Session:
+      type: object
+      required: [game, credentials]
+      properties:
+        game: { $ref: '#/components/schemas/Game' }
+        credentials:
+          type: array
+          items: { $ref: '#/components/schemas/Credential' }
+    Player:
+      type: object
+      required: [id, name, user_id, score, faults, mistakes, skip_turns_remaining, connected, forfeit_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        user_id:
+          type: string
+          nullable: true
+          description: |
+            The account playing this seat (see "Identity"), or null for a guest —
+            e.g. player 2 of a same-device versus game. For a future leaderboard.
+        score: { type: integer, minimum: 0 }
+        faults:
+          type: integer
+          description: Faults counted toward the limit. Resets to 0 once the skip penalty is served.
+        mistakes:
+          type: integer
+          description: Total wrong fills this game. Never resets. Used as "mistakes" in single mode.
+        skip_turns_remaining: { type: integer, minimum: 0 }
+        connected:
+          type: boolean
+          description: Online games only (always true otherwise). See "Presence and forfeit".
+        forfeit_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Set while an online player in a running game is disconnected.
+    Turn:
+      type: object
+      required: [player_id, started_at, deadline_at]
+      properties:
+        player_id: { type: string }
+        started_at: { type: string, format: date-time }
+        deadline_at: { type: string, format: date-time }
+    Rules:
+      type: object
+      required: [turn_limit_ms, max_points, min_points, fault_limit, skip_turns_on_fault_limit, disconnect_forfeit_ms]
+      properties:
+        turn_limit_ms: { type: integer, example: 10000 }
+        max_points: { type: integer, example: 10 }
+        min_points: { type: integer, example: 1 }
+        fault_limit: { type: integer, example: 3 }
+        skip_turns_on_fault_limit: { type: integer, example: 2 }
+        disconnect_forfeit_ms: { type: integer, example: 60000 }
+    Game:
+      type: object
+      required: [id, mode, online, difficulty, status, join_code, puzzle, board, players, current_turn, rules, started_at, completed_at, end_reason, winner_id, version, server_time]
+      properties:
+        id: { type: string }
+        mode: { $ref: '#/components/schemas/Mode' }
+        online: { type: boolean }
+        difficulty: { $ref: '#/components/schemas/Difficulty' }
+        status:
+          type: string
+          enum: [waiting, in_progress, completed]
+          description: '`waiting` only for online lobbies.'
+        join_code:
+          type: string
+          nullable: true
+          description: Only while `waiting`.
+        puzzle:
+          allOf: [{ $ref: '#/components/schemas/Grid' }]
+          description: Initial clues. Never changes.
+        board:
+          allOf: [{ $ref: '#/components/schemas/Grid' }]
+          description: Clues plus every correctly filled box. Wrong fills are never stored.
+        players:
+          type: array
+          description: |
+            Turn order = array order. 1 item for `single` and for an online lobby
+            (host only), 2 otherwise.
+          items: { $ref: '#/components/schemas/Player' }
+        current_turn:
+          type: object
+          allOf: [{ $ref: '#/components/schemas/Turn' }]
+          nullable: true
+          description: null in `single` mode, while `waiting`, and once completed.
+        rules: { $ref: '#/components/schemas/Rules' }
+        started_at:
+          type: string
+          format: date-time
+          description: Creation time; for online games reset to the moment the guest joins.
+        completed_at: { type: string, format: date-time, nullable: true }
+        end_reason:
+          type: string
+          enum: [solved, forfeit]
+          nullable: true
+        winner_id:
+          type: string
+          nullable: true
+          description: Versus only. Set on completion unless the game is a draw.
+        version:
+          type: integer
+          description: Starts at 1 and increases on every state change.
+        server_time: { type: string, format: date-time }
+    MoveRequest:
+      type: object
+      required: [row, col, value]
+      properties:
+        row: { type: integer, minimum: 0, maximum: 8 }
+        col: { type: integer, minimum: 0, maximum: 8 }
+        value: { type: integer, minimum: 1, maximum: 9 }
+    GameEvent:
+      description: |
+        Something that happened as a side effect of a request or timer, so the UI can
+        animate and announce it. In `events`, order is chronological.
+      oneOf:
+        - type: object
+          description: Every accepted move, correct or not.
+          required: [type, player_id, row, col, value, result, points]
+          properties:
+            type: { type: string, enum: [move] }
+            player_id: { type: string }
+            row: { type: integer }
+            col: { type: integer }
+            value: { type: integer }
+            result: { type: string, enum: [correct, incorrect] }
+            points: { type: integer }
+        - type: object
+          required: [type, player_id]
+          properties:
+            type: { type: string, enum: [turn_expired] }
+            player_id: { type: string }
+        - type: object
+          required: [type, player_id]
+          properties:
+            type: { type: string, enum: [turn_skipped] }
+            player_id: { type: string }
+        - type: object
+          required: [type, player_id, skip_turns]
+          properties:
+            type: { type: string, enum: [fault_limit_reached] }
+            player_id: { type: string }
+            skip_turns: { type: integer }
+        - type: object
+          required: [type, player_id]
+          properties:
+            type: { type: string, enum: [player_joined] }
+            player_id: { type: string }
+        - type: object
+          required: [type, player_id, connected]
+          properties:
+            type: { type: string, enum: [player_connection] }
+            player_id: { type: string }
+            connected: { type: boolean }
+        - type: object
+          required: [type, player_id]
+          properties:
+            type: { type: string, enum: [player_forfeited] }
+            player_id: { type: string }
+        - type: object
+          required: [type]
+          properties:
+            type: { type: string, enum: [game_completed] }
+      discriminator:
+        propertyName: type
+    MoveResponse:
+      type: object
+      required: [result, points, elapsed_ms, game, events]
+      properties:
+        result: { type: string, enum: [correct, incorrect] }
+        points:
+          type: integer
+          description: Points awarded. 0 when incorrect, and always 0 in single mode.
+        elapsed_ms:
+          type: integer
+          nullable: true
+          description: Turn start to this move. null in single mode.
+        game: { $ref: '#/components/schemas/Game' }
+        events:
+          type: array
+          description: Includes the `move` event, plus fault/skip/completion events it caused.
+          items: { $ref: '#/components/schemas/GameEvent' }
+    GameUpdate:
+      description: Response of expire and forfeit, and the `data` of every stream `update` message.
+      type: object
+      required: [game, events]
+      properties:
+        game: { $ref: '#/components/schemas/Game' }
+        events:
+          type: array
+          items: { $ref: '#/components/schemas/GameEvent' }
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum:
+                - VALIDATION_ERROR
+                - INVALID_TOKEN
+                - USERNAME_TAKEN
+                - INVALID_CREDENTIALS
+                - GAME_NOT_FOUND
+                - JOIN_CODE_NOT_FOUND
+                - GAME_FULL
+                - GAME_NOT_STARTED
+                - GAME_COMPLETED
+                - NOT_YOUR_TURN
+                - TURN_EXPIRED
+                - TURN_NOT_EXPIRED
+                - NO_ACTIVE_TURN
+                - NOT_ONLINE
+                - CELL_NOT_EMPTY
+            message: { type: string }
+            game:
+              allOf: [{ $ref: '#/components/schemas/Game' }]
+              description: Present on 409 responses.

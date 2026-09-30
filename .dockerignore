@@ -1,0 +1,18 @@
+node_modules
+dist
+*.tsbuildinfo
+
+.git
+.gitignore
+
+# docs are reference-only, not used at runtime
+docs
+*.md
+
+.env
+.env.local
+.env.*.local
+
+.vscode
+.idea
+.DS_Store
