@@ -6,11 +6,12 @@ interface Props {
   error: string | null;
   onLogin: (req: LoginRequest) => void;
   onRegister: (req: RegisterRequest) => void;
+  onCredits: () => void;
 }
 
 type Tab = 'login' | 'register';
 
-export function Login({ busy, error, onLogin, onRegister }: Props) {
+export function Login({ busy, error, onLogin, onRegister, onCredits }: Props) {
   const [tab, setTab] = useState<Tab>('login');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -84,6 +85,9 @@ export function Login({ busy, error, onLogin, onRegister }: Props) {
           {busy ? 'One moment…' : tab === 'login' ? 'Log in' : 'Create account'}
         </button>
       </form>
+      <button className="link" type="button" onClick={onCredits}>
+        Credits
+      </button>
     </main>
   );
 }

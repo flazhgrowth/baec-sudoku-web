@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { GameScreen } from './components/GameScreen';
 import { ChangePassword } from './components/ChangePassword';
+import { Credits } from './components/Credits';
 import { Home } from './components/Home';
 import { Lobby } from './components/Lobby';
 import { Login } from './components/Login';
@@ -18,9 +19,21 @@ export function App() {
   }, [game, inviteCode]);
 
   const [changingPassword, setChangingPassword] = useState(false);
+  const [showCredits, setShowCredits] = useState(false);
 
   if (!auth.ready) return null;
-  if (!auth.user) return <Login busy={auth.busy} error={auth.error} onLogin={auth.login} onRegister={auth.register} />;
+  if (showCredits && !game) return <Credits onBack={() => setShowCredits(false)} />;
+  if (!auth.user) {
+    return (
+      <Login
+        busy={auth.busy}
+        error={auth.error}
+        onLogin={auth.login}
+        onRegister={auth.register}
+        onCredits={() => setShowCredits(true)}
+      />
+    );
+  }
 
   if (changingPassword && !game) {
     return <ChangePassword onSubmit={auth.changePassword} onDone={() => setChangingPassword(false)} />;
@@ -47,6 +60,7 @@ export function App() {
       username={auth.user.username}
       onCreate={create}
       onJoin={join}
+      onCredits={() => setShowCredits(true)}
       onChangePassword={() => setChangingPassword(true)}
       onLogout={auth.logout}
     />

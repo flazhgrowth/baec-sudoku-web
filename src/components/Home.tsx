@@ -11,6 +11,7 @@ interface Props {
   onCreate: (req: CreateGameRequest) => void;
   onJoin: (req: JoinGameRequest) => void;
   onChangePassword: () => void;
+  onCredits: () => void;
   onLogout: () => void;
 }
 
@@ -49,7 +50,7 @@ type Players = 'single' | 'versus';
 type Where = 'local' | 'online';
 type Role = 'host' | 'join';
 
-export function Home({ busy, error, initialCode, username, onCreate, onJoin, onChangePassword, onLogout }: Props) {
+export function Home({ busy, error, initialCode, username, onCreate, onJoin, onChangePassword, onCredits, onLogout }: Props) {
   const invited = initialCode !== null;
   const [players, setPlayers] = useState<Players>(invited ? 'versus' : 'single');
   const [where, setWhere] = useState<Where>(invited ? 'online' : 'local');
@@ -170,6 +171,9 @@ export function Home({ busy, error, initialCode, username, onCreate, onJoin, onC
           {busy ? 'One moment…' : joining ? 'Join game' : online ? 'Create game' : 'Start game'}
         </button>
       </form>
+      <button className="link" type="button" onClick={onCredits}>
+        Credits
+      </button>
     </main>
   );
 }
