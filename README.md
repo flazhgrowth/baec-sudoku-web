@@ -84,6 +84,22 @@ spec of those rules, and `src/mock/generator.ts` generates unique-solution puzzl
 useful — **except `authEngine.ts`'s password hash**, which is deliberately simplistic and explicitly
 flagged as unsafe in its own file header; use a real password-hashing algorithm instead.
 
+## Deploy
+
+Production runs on the VPS as the `sudoku-web` service in `~/works/projects-manage/docker-compose.yaml`
+(nginx serving the static build, behind Caddy at `https://sudous.baeclatant.com`). It is built with
+`VITE_API_MODE=http` and `VITE_API_BASE_URL=https://api.baeclatant.com/ms/sudous/api/v1`, which Vite
+bakes in at build time. After pushing to `main`, run on the server:
+
+```sh
+dpl-sudoku-web            # git pull, rebuild, restart only sudoku-web, health-check
+dpl-sudoku-web --no-pull  # rebuild what is already checked out
+```
+
+The script is `scripts/dpl-sudoku-web.sh`. To install or update it on the server:
+`sudo install -m 0755 scripts/dpl-sudoku-web.sh /usr/local/bin/dpl-sudoku-web`. It refuses to run if the
+server checkout has local changes or cannot fast-forward.
+
 ## Layout
 
 ```
@@ -93,5 +109,6 @@ src/api/                SudokuApi + AuthApi interfaces, http + mock implementati
 src/mock/               rules engine, auth engine, puzzle generator (mock backend, reference for the real one)
 src/hooks/useAuth.ts    login/register/logout, persisted session
 src/hooks/useGame.ts    game state, live stream, feedback, turn-expiry fallback
+scripts/dpl-sudoku-web.sh    server deploy script (installed as /usr/local/bin/dpl-sudoku-web)
 src/components/         Login, Home, Lobby, GameScreen, Board, NumberPad, Scoreboard
 ```
