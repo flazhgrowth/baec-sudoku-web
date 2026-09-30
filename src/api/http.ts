@@ -49,7 +49,7 @@ export interface RequestOptions {
 }
 
 export function createRequest(baseUrl: string) {
-  return async function request<T>(method: 'GET' | 'POST', path: string, opts: RequestOptions = {}): Promise<T> {
+  return async function request<T>(method: 'GET' | 'POST' | 'PUT', path: string, opts: RequestOptions = {}): Promise<T> {
     const headers: Record<string, string> = {};
     if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
     if (opts.authToken) headers['Authorization'] = `Bearer ${opts.authToken}`;

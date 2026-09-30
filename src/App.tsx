@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { GameScreen } from './components/GameScreen';
+import { ChangePassword } from './components/ChangePassword';
 import { Home } from './components/Home';
 import { Lobby } from './components/Lobby';
 import { Login } from './components/Login';
@@ -16,9 +17,14 @@ export function App() {
     if (game && inviteCode) history.replaceState(null, '', location.pathname);
   }, [game, inviteCode]);
 
+  const [changingPassword, setChangingPassword] = useState(false);
+
   if (!auth.ready) return null;
   if (!auth.user) return <Login busy={auth.busy} error={auth.error} onLogin={auth.login} onRegister={auth.register} />;
 
+  if (changingPassword && !game) {
+    return <ChangePassword onSubmit={auth.changePassword} onDone={() => setChangingPassword(false)} />;
+  }
   if (game?.status === 'waiting') return <Lobby game={game} onLeave={quit} />;
   if (game) {
     return (
@@ -41,6 +47,7 @@ export function App() {
       username={auth.user.username}
       onCreate={create}
       onJoin={join}
+      onChangePassword={() => setChangingPassword(true)}
       onLogout={auth.logout}
     />
   );

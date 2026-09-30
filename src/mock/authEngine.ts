@@ -55,13 +55,17 @@ export function hashPassword(password: string, salt: string): string {
 const iso = (ms: number) => new Date(ms).toISOString();
 const toPublicUser = (u: StoredUser): User => ({ id: u.id, username: u.username, created_at: u.created_at });
 
+function validatePassword(password: unknown) {
+  if (typeof password !== 'string' || password.length < MIN_PASSWORD || password.length > MAX_PASSWORD) {
+    throw new ApiError(422, 'VALIDATION_ERROR', `password must be ${MIN_PASSWORD}-${MAX_PASSWORD} characters`);
+  }
+}
+
 function validate(req: { username: unknown; password: unknown }) {
   if (typeof req.username !== 'string' || !USERNAME_RE.test(req.username)) {
     throw new ApiError(422, 'VALIDATION_ERROR', 'username must be 3-20 letters, digits or underscores');
   }
-  if (typeof req.password !== 'string' || req.password.length < MIN_PASSWORD || req.password.length > MAX_PASSWORD) {
-    throw new ApiError(422, 'VALIDATION_ERROR', `password must be ${MIN_PASSWORD}-${MAX_PASSWORD} characters`);
-  }
+  validatePassword(req.password);
 }
 
 export function registerUser(
@@ -115,4 +119,15 @@ export function getUserByToken(store: AuthStore, token: string | undefined): Use
 /** Idempotent: logging out twice, or a token that's already gone, is not an error. */
 export function logoutUser(store: AuthStore, token: string) {
   delete store.tokens[token];
+}
+
+/** Like the backend: no current password needed, and existing tokens stay valid. */
+export function changePassword(store: AuthStore, token: string | undefined, password: string) {
+  const user_id = token ? store.tokens[token] : undefined;
+  const user = user_id ? store.users.find((u) => u.id === user_id) : undefined;
+  if (!user) throw new ApiError(401, 'INVALID_TOKEN', 'Missing or invalid auth token');
+  if (typeof password !== 'string' || !password) throw new ApiError(400, 'password_mandatory', 'password is required');
+  validatePassword(password);
+  user.salt = `${user.salt}~`;
+  user.passwordHash = hashPassword(password, user.salt);
 }

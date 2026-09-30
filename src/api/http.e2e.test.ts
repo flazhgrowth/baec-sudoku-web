@@ -68,6 +68,15 @@ describe.skipIf(!BASE)('live backend', { timeout: 60_000 }, () => {
     await expect(auth.logout('nope')).resolves.toBeUndefined();
   });
 
+  it('changes the password without a current one; the old token keeps working', async () => {
+    expect(await fails(auth.changePassword(aliceToken, ''))).toMatchObject({ status: 400, code: 'password_mandatory' });
+    expect(await fails(auth.changePassword('nope', 'whatever123'))).toMatchObject({ status: 401 });
+    await auth.changePassword(aliceToken, 'changed-pw-1');
+    expect(await fails(auth.login({ username: alice, password: PASSWORD }))).toMatchObject({ code: 'invalid_credentials' });
+    await auth.login({ username: alice, password: 'changed-pw-1' });
+    expect((await auth.me(aliceToken)).username).toBe(alice);
+  });
+
   it('single game: brute-forces a cell, wrong fills are 200 incorrect, then CELL_NOT_EMPTY', async () => {
     const { game, credentials } = await api.createGame({ mode: 'single', difficulty: 'easy' }, aliceToken);
     expect(game).toMatchObject({ mode: 'single', status: 'in_progress', current_turn: null });

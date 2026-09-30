@@ -28,6 +28,18 @@ describe('mock AuthApi', () => {
     });
   });
 
+  it('changePassword swaps the password and keeps the token valid', async () => {
+    const auth = createMockAuthApi();
+    const { token } = await auth.register({ username: 'Emery', password: 'hunter22' });
+    await expect(auth.changePassword(token, '')).rejects.toMatchObject({ code: 'password_mandatory' });
+    await expect(auth.changePassword(token, '123')).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    await expect(auth.changePassword('nope', 'newpass22')).rejects.toMatchObject({ code: 'INVALID_TOKEN' });
+    await auth.changePassword(token, 'newpass22');
+    await expect(auth.me(token)).resolves.toMatchObject({ username: 'emery' });
+    await expect(auth.login({ username: 'emery', password: 'hunter22' })).rejects.toMatchObject({ code: 'invalid_credentials' });
+    await expect(auth.login({ username: 'emery', password: 'newpass22' })).resolves.toMatchObject({ user: { username: 'emery' } });
+  });
+
   it('logout invalidates the token', async () => {
     const auth = createMockAuthApi();
     const { token } = await auth.register({ username: 'Casey', password: 'hunter22' });

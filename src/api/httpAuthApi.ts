@@ -31,6 +31,7 @@ export function createHttpAuthApi(baseUrl: string): AuthApi {
     register: async (req) => toSession(await friendly(request<AccountData>('POST', '/auth/register', { body: req }))),
     login: async (req) => toSession(await friendly(request<AccountData>('POST', '/auth/login', { body: req }))),
     me: (token) => request<User>('GET', '/auth/me', { authToken: token }),
+    changePassword: (token, password) => request<void>('PUT', '/auth/password', { body: { password }, authToken: token }),
     logout: (token) => request<void>('POST', '/auth/logout', { authToken: token }),
   };
 }

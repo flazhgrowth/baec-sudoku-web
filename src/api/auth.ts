@@ -35,5 +35,10 @@ export interface AuthApi {
   login(req: LoginRequest): Promise<AuthSession>;
   /** Resolves the account behind a token. Used to restore a session after a reload. */
   me(token: string): Promise<User>;
+  /**
+   * Sets a new password for the account behind `token`. The current password is not asked for, and
+   * existing tokens (this one included) keep working.
+   */
+  changePassword(token: string, password: string): Promise<void>;
   logout(token: string): Promise<void>;
 }

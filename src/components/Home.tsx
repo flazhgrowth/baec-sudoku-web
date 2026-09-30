@@ -10,6 +10,7 @@ interface Props {
   username: string;
   onCreate: (req: CreateGameRequest) => void;
   onJoin: (req: JoinGameRequest) => void;
+  onChangePassword: () => void;
   onLogout: () => void;
 }
 
@@ -48,7 +49,7 @@ type Players = 'single' | 'versus';
 type Where = 'local' | 'online';
 type Role = 'host' | 'join';
 
-export function Home({ busy, error, initialCode, username, onCreate, onJoin, onLogout }: Props) {
+export function Home({ busy, error, initialCode, username, onCreate, onJoin, onChangePassword, onLogout }: Props) {
   const invited = initialCode !== null;
   const [players, setPlayers] = useState<Players>(invited ? 'versus' : 'single');
   const [where, setWhere] = useState<Where>(invited ? 'online' : 'local');
@@ -73,6 +74,10 @@ export function Home({ busy, error, initialCode, username, onCreate, onJoin, onL
         <h1>Sudoku</h1>
         <p className="playing-as">
           {username} ·{' '}
+          <button type="button" className="link" onClick={onChangePassword}>
+            Password
+          </button>{' '}
+          ·{' '}
           <button type="button" className="link" onClick={onLogout}>
             Log out
           </button>

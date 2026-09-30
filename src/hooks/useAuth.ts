@@ -79,11 +79,25 @@ export function useAuth() {
   const register = useCallback((req: RegisterRequest) => run(() => authApi.register(req)), [run]);
   const login = useCallback((req: LoginRequest) => run(() => authApi.login(req)), [run]);
 
+  /** Resolves true on success. Errors are returned to the caller rather than set as the login error. */
+  const changePassword = useCallback(
+    async (password: string): Promise<string | null> => {
+      if (!state) return 'Not logged in';
+      try {
+        await authApi.changePassword(state.token, password);
+        return null;
+      } catch (e) {
+        return e instanceof ApiError ? e.message : 'Something went wrong';
+      }
+    },
+    [state],
+  );
+
   const logout = useCallback(() => {
     const token = state?.token;
     persist(null);
     if (token) authApi.logout(token).catch(() => {});
   }, [state, persist]);
 
-  return { user: state?.user ?? null, token: state?.token ?? null, ready, busy, error, register, login, logout };
+  return { user: state?.user ?? null, token: state?.token ?? null, ready, busy, error, register, login, changePassword, logout };
 }

@@ -1,5 +1,5 @@
 import type { AuthApi } from './auth';
-import { getUserByToken, loginUser, logoutUser, registerUser, type AuthStore } from '../mock/authEngine';
+import { changePassword, getUserByToken, loginUser, logoutUser, registerUser, type AuthStore } from '../mock/authEngine';
 
 const STORAGE_KEY = 'sudoku.mock.auth';
 const EMPTY: AuthStore = { users: [], tokens: {} };
@@ -71,6 +71,12 @@ export function createMockAuthApi(): AuthApi {
 
     async me(token) {
       return getUserByToken(read(), token);
+    },
+
+    async changePassword(token, password) {
+      const store = read();
+      changePassword(store, token, password);
+      write(store);
     },
 
     async logout(token) {

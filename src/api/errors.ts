@@ -18,6 +18,8 @@ export type ApiErrorCode =
   | 'bad_request'
   | 'conflict'
   | 'invalid_credentials'
+  | 'password_mandatory'
+  | 'account_not_found'
   | 'internal_server_error'
   | 'INTERNAL_ERROR'
   | 'UNKNOWN';
