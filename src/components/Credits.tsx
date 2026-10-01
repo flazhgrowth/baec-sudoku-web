@@ -7,11 +7,11 @@ export function Credits({ onBack }: Props) {
     <main className="home">
       <h1>Credits</h1>
       <p className="hint">
-        Sudoku started with a simple wish: the author, <strong>baeclatant</strong>, wanted to play Sudoku in a browser.
+        The Sudoku started with a simple wish: the author, <strong>baeclatant</strong>, wanted to play Sudoku via browser.
       </p>
       <p className="hint">
         The versus mode came later, and it is thanks to a rather fun conversation with <strong>✨Joko✨</strong>. That chat is
-        what made it live.
+        what made the versus mode live.
       </p>
       <button className="primary" type="button" onClick={onBack}>
         Back

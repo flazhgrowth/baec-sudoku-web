@@ -85,8 +85,8 @@ export function Login({ busy, error, onLogin, onRegister, onCredits }: Props) {
           {busy ? 'One moment…' : tab === 'login' ? 'Log in' : 'Create account'}
         </button>
       </form>
-      <button className="link" type="button" onClick={onCredits}>
-        Credits
+      <button className="link link-cta" type="button" onClick={onCredits}>
+        About &amp; Credits ›
       </button>
     </main>
   );
