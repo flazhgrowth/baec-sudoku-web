@@ -83,6 +83,8 @@ h1 { font-size: 2.2rem; margin: 0 0 1.25rem; letter-spacing: -0.02em; }
 .game-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
 .game-tag { color: var(--muted); font-size: 0.85rem; text-transform: capitalize; }
 .link { background: none; border: 0; padding: 0.25rem 0; color: var(--muted); }
+.link-cta { color: var(--accent); font-weight: 600; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.link-cta:hover { text-decoration-thickness: 2px; }
 
 .scoreboard.versus { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .player { background: var(--surface); border: 2px solid var(--line); border-radius: 12px; padding: 0.6rem 0.75rem; transition: border-color 0.15s; }

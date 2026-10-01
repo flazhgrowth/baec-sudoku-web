@@ -76,7 +76,7 @@ export function Home({ busy, error, initialCode, username, onCreate, onJoin, onC
         <p className="playing-as">
           {username} ·{' '}
           <button type="button" className="link" onClick={onChangePassword}>
-            Password
+            Change Password
           </button>{' '}
           ·{' '}
           <button type="button" className="link" onClick={onLogout}>
@@ -171,8 +171,8 @@ export function Home({ busy, error, initialCode, username, onCreate, onJoin, onC
           {busy ? 'One moment…' : joining ? 'Join game' : online ? 'Create game' : 'Start game'}
         </button>
       </form>
-      <button className="link" type="button" onClick={onCredits}>
-        Credits
+      <button className="link link-cta" type="button" onClick={onCredits}>
+        About &amp; Credits ›
       </button>
     </main>
   );
