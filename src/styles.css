@@ -170,6 +170,7 @@ h1 { font-size: 2.2rem; margin: 0 0 1.25rem; letter-spacing: -0.02em; }
 }
 .pad-key:not(:disabled):active { background: var(--same); }
 .pad-key:disabled { opacity: 0.4; }
+.pad-key.done:disabled { opacity: 1; color: var(--good); background: var(--good-bg); border-color: var(--good); }
 
 /* ---------- Result ---------- */
 .overlay { position: fixed; inset: 0; background: rgba(10, 12, 20, 0.55); display: grid; place-items: center; padding: 16px; }
